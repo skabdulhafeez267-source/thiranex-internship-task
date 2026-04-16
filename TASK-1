@@ -1,0 +1,266 @@
+"""
+Password Strength Analyzer
+Thiranex Assignment - Skill Development & Future Tech
+Evaluates password strength, provides feedback, and suggests stronger alternatives.
+"""
+
+import re
+import random
+import string
+import hashlib
+
+
+# ─────────────────────────────────────────────
+#  Common weak passwords (mini blacklist)
+# ─────────────────────────────────────────────
+COMMON_PASSWORDS = {
+    "password", "123456", "password123", "admin", "letmein",
+    "qwerty", "abc123", "monkey", "master", "dragon",
+    "iloveyou", "sunshine", "princess", "welcome", "shadow",
+    "superman", "michael", "football", "batman", "trustno1"
+}
+
+
+# ─────────────────────────────────────────────
+#  Core analyser
+# ─────────────────────────────────────────────
+def analyze_password(password: str) -> dict:
+    """
+    Analyse a password and return a detailed report.
+
+    Returns
+    -------
+    dict with keys:
+        score        (0–100)
+        strength     ('Very Weak' | 'Weak' | 'Moderate' | 'Strong' | 'Very Strong')
+        issues       list[str]
+        suggestions  list[str]
+        entropy_bits float
+    """
+    issues: list[str] = []
+    bonus = 0
+
+    # ── Length ──────────────────────────────
+    length = len(password)
+    if length < 6:
+        length_score = 0
+        issues.append("Too short – use at least 8 characters.")
+    elif length < 8:
+        length_score = 10
+        issues.append("Short – aim for 12+ characters.")
+    elif length < 12:
+        length_score = 20
+    elif length < 16:
+        length_score = 30
+        bonus += 5
+    else:
+        length_score = 40
+        bonus += 10
+
+    # ── Character classes ────────────────────
+    has_lower   = bool(re.search(r"[a-z]", password))
+    has_upper   = bool(re.search(r"[A-Z]", password))
+    has_digit   = bool(re.search(r"\d",   password))
+    has_special = bool(re.search(r"[^a-zA-Z0-9]", password))
+
+    complexity_score = 0
+    if has_lower:   complexity_score += 10
+    else:           issues.append("Add lowercase letters (a–z).")
+    if has_upper:   complexity_score += 10
+    else:           issues.append("Add uppercase letters (A–Z).")
+    if has_digit:   complexity_score += 10
+    else:           issues.append("Add numbers (0–9).")
+    if has_special: complexity_score += 15
+    else:           issues.append("Add special characters (!@#$% …).")
+
+    # ── Common password check ────────────────
+    uniqueness_score = 15
+    if password.lower() in COMMON_PASSWORDS:
+        uniqueness_score = 0
+        issues.append("This is a very common password – choose something unique.")
+
+    # ── Repetition / sequential patterns ────
+    if re.search(r"(.)\1{2,}", password):
+        bonus -= 10
+        issues.append("Avoid repeating the same character 3+ times in a row.")
+    if re.search(r"(012|123|234|345|456|567|678|789|890|abc|bcd|cde|def)", password.lower()):
+        bonus -= 5
+        issues.append("Avoid sequential patterns like '123' or 'abc'.")
+
+    # ── Entropy estimate ─────────────────────
+    pool = 0
+    if has_lower:   pool += 26
+    if has_upper:   pool += 26
+    if has_digit:   pool += 10
+    if has_special: pool += 32
+    pool = pool or 26
+    import math
+    entropy_bits = round(length * math.log2(pool), 1)
+
+    # ── Final score ──────────────────────────
+    raw = length_score + complexity_score + uniqueness_score + bonus
+    score = max(0, min(100, raw))
+
+    if score < 20:
+        strength = "Very Weak"
+    elif score < 40:
+        strength = "Weak"
+    elif score < 60:
+        strength = "Moderate"
+    elif score < 80:
+        strength = "Strong"
+    else:
+        strength = "Very Strong"
+
+    suggestions = _build_suggestions(password, has_upper, has_lower, has_digit, has_special, length)
+
+    return {
+        "score":        score,
+        "strength":     strength,
+        "issues":       issues,
+        "suggestions":  suggestions,
+        "entropy_bits": entropy_bits,
+    }
+
+
+def _build_suggestions(password, has_upper, has_lower, has_digit, has_special, length) -> list[str]:
+    suggestions = []
+
+    # Suggest stronger alternatives
+    variations = []
+
+    # Variation 1 – add missing classes to user's password
+    improved = password
+    if not has_upper:
+        improved = improved[:1].upper() + improved[1:]
+    if not has_digit:
+        improved += str(random.randint(10, 99))
+    if not has_special:
+        improved += random.choice("!@#$%^&*")
+    if len(improved) < 12:
+        improved += random.choice(string.ascii_letters)
+    if improved != password:
+        variations.append(f"Improved version of yours: {improved}")
+
+    # Variation 2 – random strong password
+    variations.append(f"Random strong password: {generate_strong_password(16)}")
+
+    # Variation 3 – passphrase style
+    words = ["Tiger", "Mountain", "River", "Storm", "Eagle"]
+    passphrase = (
+        random.choice(words)
+        + str(random.randint(10, 99))
+        + random.choice(words)
+        + random.choice("!@#$")
+    )
+    variations.append(f"Passphrase style: {passphrase}")
+
+    return variations
+
+
+def generate_strong_password(length: int = 16) -> str:
+    """Generate a cryptographically-suitable strong password."""
+    alphabet = string.ascii_letters + string.digits + "!@#$%^&*()-_=+"
+    while True:
+        pwd = "".join(random.choices(alphabet, k=length))
+        # Ensure all classes present
+        if (re.search(r"[a-z]", pwd) and re.search(r"[A-Z]", pwd)
+                and re.search(r"\d", pwd) and re.search(r"[^a-zA-Z0-9]", pwd)):
+            return pwd
+
+
+def hash_password(password: str) -> str:
+    """Return SHA-256 hex digest (demonstration of basic cryptography)."""
+    return hashlib.sha256(password.encode()).hexdigest()
+
+
+# ─────────────────────────────────────────────
+#  Simple in-memory "used passwords" database
+# ─────────────────────────────────────────────
+_used_password_hashes: set[str] = set()
+
+
+def register_password(password: str) -> bool:
+    """
+    Store a password hash.  Returns False if the password was already registered
+    (prevents reuse).
+    """
+    h = hash_password(password)
+    if h in _used_password_hashes:
+        return False
+    _used_password_hashes.add(h)
+    return True
+
+
+def was_password_used(password: str) -> bool:
+    return hash_password(password) in _used_password_hashes
+
+
+# ─────────────────────────────────────────────
+#  CLI interface
+# ─────────────────────────────────────────────
+def print_bar(score: int) -> str:
+    filled = score // 5          # 20 segments
+    bar = "█" * filled + "░" * (20 - filled)
+    return f"[{bar}] {score}/100"
+
+
+def main():
+    print("=" * 55)
+    print("       PASSWORD STRENGTH ANALYZER")
+    print("       Thiranex – Skill Development & Future Tech")
+    print("=" * 55)
+
+    while True:
+        print("\nOptions: (1) Analyse password  (2) Generate strong password  (3) Quit")
+        choice = input("Choice: ").strip()
+
+        if choice == "1":
+            import getpass
+            pwd = getpass.getpass("Enter password (hidden): ")
+            if not pwd:
+                print("No password entered.")
+                continue
+
+            result = analyze_password(pwd)
+
+            print(f"\nStrength : {result['strength']}")
+            print(f"Score    : {print_bar(result['score'])}")
+            print(f"Entropy  : {result['entropy_bits']} bits")
+
+            reused = was_password_used(pwd)
+            if reused:
+                print("⚠️  This password has been used before – choose a different one!")
+
+            if result["issues"]:
+                print("\nIssues found:")
+                for i, issue in enumerate(result["issues"], 1):
+                    print(f"  {i}. {issue}")
+
+            print("\nSuggested alternatives:")
+            for s in result["suggestions"]:
+                print(f"  • {s}")
+
+            # Register if strong enough
+            if result["score"] >= 60 and not reused:
+                register_password(pwd)
+                print("\n✅ Password registered successfully.")
+            elif result["score"] < 60:
+                print("\n❌ Password too weak to register. Strengthen it first.")
+
+            print(f"\n🔐 SHA-256 hash: {hash_password(pwd)}")
+
+        elif choice == "2":
+            length = input("Desired length (default 16): ").strip()
+            length = int(length) if length.isdigit() else 16
+            print(f"\nGenerated password: {generate_strong_password(length)}")
+
+        elif choice == "3":
+            print("Goodbye! Stay secure. 🔒")
+            break
+        else:
+            print("Invalid choice.")
+
+
+if __name__ == "__main__":
+    main()

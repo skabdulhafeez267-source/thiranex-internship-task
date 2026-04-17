@@ -1,0 +1,202 @@
+"""
+Vulnerability Scanner (Mini Project)
+=====================================
+Thiranex - Skill Development & Future Tech
+Author  : Suman
+Due Date: 29 Apr 2026
+
+Features:
+  - Scan for open ports / weak configurations
+  - Identify outdated software versions (HTTP Server header)
+  - Generate a simple vulnerability report
+"""
+
+import socket
+import sys
+import json
+import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+# ─────────────────────────────────────────────
+#  CONFIG
+# ─────────────────────────────────────────────
+COMMON_PORTS = {
+    21:  "FTP",
+    22:  "SSH",
+    23:  "Telnet",
+    25:  "SMTP",
+    53:  "DNS",
+    80:  "HTTP",
+    110: "POP3",
+    143: "IMAP",
+    443: "HTTPS",
+    445: "SMB",
+    3306:"MySQL",
+    3389:"RDP",
+    5432:"PostgreSQL",
+    6379:"Redis",
+    8080:"HTTP-Alt",
+    8443:"HTTPS-Alt",
+    27017:"MongoDB",
+}
+
+INSECURE_PORTS = {23: "Telnet (unencrypted)", 21: "FTP (unencrypted)", 445: "SMB (ransomware risk)", 3389: "RDP (brute-force risk)"}
+
+OUTDATED_SERVERS = ["Apache/2.2", "Apache/2.0", "nginx/1.1", "nginx/1.0",
+                    "IIS/6.0", "IIS/7.0", "PHP/5.", "PHP/7.0", "PHP/7.1"]
+
+TIMEOUT = 1.0   # seconds
+
+# ─────────────────────────────────────────────
+#  SCANNER FUNCTIONS
+# ─────────────────────────────────────────────
+
+def scan_port(host: str, port: int) -> dict | None:
+    """Try to connect to host:port. Return info dict if open, else None."""
+    try:
+        with socket.create_connection((host, port), timeout=TIMEOUT) as s:
+            banner = ""
+            try:
+                s.settimeout(0.5)
+                # Send a basic HTTP request for web ports
+                if port in (80, 8080, 443, 8443):
+                    s.sendall(b"HEAD / HTTP/1.0\r\nHost: " + host.encode() + b"\r\n\r\n")
+                raw = s.recv(1024).decode(errors="ignore")
+                banner = raw.strip().replace("\r\n", " | ")[:200]
+            except Exception:
+                pass
+            return {
+                "port": port,
+                "service": COMMON_PORTS.get(port, "Unknown"),
+                "banner": banner,
+            }
+    except (ConnectionRefusedError, OSError, socket.timeout):
+        return None
+
+
+def scan_all_ports(host: str, ports: list[int]) -> list[dict]:
+    """Scan ports concurrently and return list of open-port dicts."""
+    open_ports = []
+    with ThreadPoolExecutor(max_workers=50) as ex:
+        futures = {ex.submit(scan_port, host, p): p for p in ports}
+        for fut in as_completed(futures):
+            result = fut.result()
+            if result:
+                open_ports.append(result)
+    open_ports.sort(key=lambda x: x["port"])
+    return open_ports
+
+
+def check_weak_config(open_ports: list[dict]) -> list[dict]:
+    """Flag insecure / high-risk open ports."""
+    findings = []
+    for entry in open_ports:
+        p = entry["port"]
+        if p in INSECURE_PORTS:
+            findings.append({
+                "port": p,
+                "service": entry["service"],
+                "issue": INSECURE_PORTS[p],
+                "severity": "HIGH",
+            })
+    return findings
+
+
+def check_outdated_software(open_ports: list[dict]) -> list[dict]:
+    """Detect outdated server versions from banners."""
+    findings = []
+    for entry in open_ports:
+        banner = entry.get("banner", "")
+        for old_ver in OUTDATED_SERVERS:
+            if old_ver.lower() in banner.lower():
+                findings.append({
+                    "port": entry["port"],
+                    "service": entry["service"],
+                    "detected": old_ver,
+                    "banner_snippet": banner[:100],
+                    "severity": "MEDIUM",
+                })
+                break
+    return findings
+
+
+def check_default_services(open_ports: list[dict]) -> list[dict]:
+    """Warn about services that often use default credentials."""
+    risky = {3306: "MySQL", 5432: "PostgreSQL", 6379: "Redis", 27017: "MongoDB", 8080: "HTTP-Alt"}
+    findings = []
+    for entry in open_ports:
+        if entry["port"] in risky:
+            findings.append({
+                "port": entry["port"],
+                "service": entry["service"],
+                "issue": "Database/cache service exposed – check for default credentials",
+                "severity": "MEDIUM",
+            })
+    return findings
+
+
+# ─────────────────────────────────────────────
+#  MAIN
+# ─────────────────────────────────────────────
+
+def run_scan(target: str = "scanme.nmap.org") -> dict:
+    """Run the full vulnerability scan and return a results dict."""
+    print(f"\n{'='*55}")
+    print(f"  Vulnerability Scanner  |  Target: {target}")
+    print(f"  Scan started : {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"{'='*55}\n")
+
+    # 1. Port scan
+    print("[*] Scanning common ports ...")
+    open_ports = scan_all_ports(target, list(COMMON_PORTS.keys()))
+    print(f"    Open ports found: {len(open_ports)}")
+    for p in open_ports:
+        print(f"    ✔  {p['port']}/tcp  {p['service']:<12}  {p['banner'][:60]}")
+
+    # 2. Weak config check
+    print("\n[*] Checking for weak / insecure configurations ...")
+    weak = check_weak_config(open_ports)
+    for w in weak:
+        print(f"    ⚠  Port {w['port']} ({w['service']}): {w['issue']}  [{w['severity']}]")
+
+    # 3. Outdated software
+    print("\n[*] Checking for outdated software versions ...")
+    outdated = check_outdated_software(open_ports)
+    for o in outdated:
+        print(f"    ⚠  Port {o['port']} ({o['service']}): {o['detected']}  [{o['severity']}]")
+
+    # 4. Default credentials risk
+    print("\n[*] Checking for exposed database services ...")
+    defaults = check_default_services(open_ports)
+    for d in defaults:
+        print(f"    ⚠  Port {d['port']} ({d['service']}): {d['issue']}  [{d['severity']}]")
+
+    # ── Summary ──────────────────────────────
+    total_vulns = len(weak) + len(outdated) + len(defaults)
+    high  = sum(1 for x in (weak+outdated+defaults) if x["severity"] == "HIGH")
+    medium= sum(1 for x in (weak+outdated+defaults) if x["severity"] == "MEDIUM")
+
+    print(f"\n{'─'*55}")
+    print(f"  SCAN COMPLETE  |  Vulnerabilities found: {total_vulns}")
+    print(f"  HIGH: {high}   MEDIUM: {medium}")
+    print(f"{'─'*55}\n")
+
+    return {
+        "target": target,
+        "scan_time": datetime.datetime.now().isoformat(),
+        "open_ports": open_ports,
+        "weak_configs": weak,
+        "outdated_software": outdated,
+        "default_credential_risks": defaults,
+        "summary": {"total": total_vulns, "high": high, "medium": medium},
+    }
+
+
+if __name__ == "__main__":
+    target = sys.argv[1] if len(sys.argv) > 1 else "scanme.nmap.org"
+    results = run_scan(target)
+    # Save JSON report
+    out_file = "scan_results.json"
+    with open(out_file, "w") as f:
+        json.dump(results, f, indent=2)
+    print(f"[+] Results saved to {out_file}")

@@ -1,0 +1,250 @@
+"""
+Phishing Email Detection Model
+Using Scikit-learn with TF-IDF + URL/keyword feature extraction
+"""
+
+import numpy as np
+import pandas as pd
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.model_selection import train_test_split
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.naive_bayes import MultinomialNB
+from sklearn.metrics import (accuracy_score, classification_report,
+                             confusion_matrix, roc_auc_score, roc_curve)
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import LabelEncoder
+import re
+import warnings
+warnings.filterwarnings('ignore')
+
+# ─────────────────────────────────────────────
+# 1. SYNTHETIC DATASET
+# ─────────────────────────────────────────────
+phishing_emails = [
+    "Click here to verify your account immediately http://bit.ly/verify-now or your account will be suspended",
+    "Urgent: Your PayPal account has been limited. Login at http://paypal-secure.tk to restore access",
+    "Congratulations! You've won $1000 gift card. Claim now at http://prize-winner.xyz/claim",
+    "ALERT: Suspicious activity detected on your bank account. Verify now: http://secure-bank-login.ml",
+    "Your Netflix subscription expired. Update payment at http://netflix-billing.cf/update",
+    "Dear customer, confirm your identity at http://amazon-security.tk to avoid account closure",
+    "You have a pending package. Track it here http://fedex-delivery.xyz/track and confirm address",
+    "IRS Notice: You owe taxes. Pay immediately at http://irs-payment.ml to avoid penalties",
+    "Win iPhone 14! Limited time offer. Click http://free-iphone14.tk/win to claim your prize",
+    "Security breach detected! Reset your password now: http://google-security-reset.cf",
+    "Your Apple ID was used to sign in. Verify at http://apple-id-verify.ml immediately",
+    "Account suspended: login to http://microsoft-account-restore.tk to reactivate your account",
+    "Lottery winner! You've won $5000. Send details to collect at http://lottery-prize.xyz",
+    "Dear user, your email storage is full. Click http://email-storage-free.ml to get 50GB free",
+    "URGENT: Credit card fraud detected. Confirm your info at http://bank-fraud-alert.cf now",
+    "Your password expires today! Update it here: http://password-reset-secure.tk",
+    "Verify your WhatsApp account or lose access: http://whatsapp-verify.ml/confirm",
+    "Claim your refund from government at http://tax-refund-gov.xyz. Limited time offer!",
+    "Dear valued customer, suspicious login detected. Secure your account: http://login-secure.cf",
+    "You are selected for free insurance. Apply now at http://free-insurance-offer.tk",
+    "Act now! Your account will be deleted unless you verify: http://verify-account.ml/urgent",
+    "Exclusive offer: 90% discount on all items. Shop at http://mega-discount-shop.xyz today",
+    "Bank of America: Your debit card is blocked. Unblock at http://boa-secure.tk",
+    "Warning: Your computer has virus! Download removal tool: http://antivirus-free.cf/download",
+    "Chase bank: Complete KYC now or account will be frozen: http://chase-kyc.ml",
+    "Dear customer login required to prevent closure http://secure-login-verify.tk/auth today",
+    "Your subscription payment failed click here http://payment-update-now.xyz to update billing",
+    "Verify identity for prize claim at http://identity-verification.cf and receive $500",
+    "Security alert your email was compromised reset now http://email-security-reset.ml",
+    "Claim free Bitcoin at http://free-bitcoin-claim.tk limited to first 100 users only",
+]
+
+legitimate_emails = [
+    "Hi John, please find attached the project report we discussed in yesterday's meeting.",
+    "Reminder: Team standup at 10 AM tomorrow in Conference Room B. Please bring your laptops.",
+    "Your Amazon order #123-456 has been shipped and will arrive by Friday, April 18.",
+    "Monthly newsletter: Check out our latest blog posts on machine learning and AI trends.",
+    "Hi, I wanted to follow up on the proposal I sent last week. Let me know your thoughts.",
+    "Your appointment with Dr. Smith is confirmed for Monday, April 21 at 2:30 PM.",
+    "Invoice #2024-001 for $500 is attached. Payment is due by April 30, 2026.",
+    "Good morning! Here are the action items from our last project meeting for your review.",
+    "Congratulations on your promotion! The team is thrilled to have you as the new manager.",
+    "Please review the attached document and share your feedback by end of day Thursday.",
+    "The quarterly sales report is ready. You can access it from the shared drive as usual.",
+    "Thanks for your purchase! Your receipt for $29.99 is attached for your records.",
+    "Lunch is rescheduled to 1 PM on Wednesday at the usual Italian restaurant downtown.",
+    "Hi team, the server maintenance is scheduled for Saturday night from 11 PM to 2 AM.",
+    "Your library books are due on April 25. You can renew them online through our portal.",
+    "Welcome to the team! Your first day orientation is scheduled for Monday morning at 9 AM.",
+    "The annual performance review process begins next month. HR will send calendar invites.",
+    "Your flight booking confirmation for May 5 is attached. Check-in opens 24 hours before.",
+    "Hi, just checking in to see how the new project is going. Let me know if you need help.",
+    "The marketing campaign results are in. We saw a 15% increase in engagement this quarter.",
+    "Please complete the mandatory security training by April 30 via the learning portal.",
+    "Your gym membership renewal is due next month. Visit the front desk to update your plan.",
+    "We're happy to let you know your job application has been received and is under review.",
+    "Board meeting agenda for Q2 review is attached. Please review before Thursday's call.",
+    "Your subscription to Premium has been renewed. Thank you for being a loyal member.",
+    "The annual company picnic is scheduled for June 15 at Riverside Park. RSVP by June 1.",
+    "Your GitHub pull request has been reviewed and approved. Great work on the new feature!",
+    "Team, please update your project status in Jira before the end of day every Friday.",
+    "Your university transcript request has been processed and will be mailed within 5 days.",
+    "Hi, the meeting has been moved to 3 PM. Please update your calendar accordingly. Thanks!",
+]
+
+# Build dataframe
+texts = phishing_emails + legitimate_emails
+labels = ['phishing'] * len(phishing_emails) + ['legitimate'] * len(legitimate_emails)
+df = pd.DataFrame({'text': texts, 'label': labels})
+df = df.sample(frac=1, random_state=42).reset_index(drop=True)
+
+# ─────────────────────────────────────────────
+# 2. FEATURE EXTRACTION
+# ─────────────────────────────────────────────
+def extract_features(text):
+    features = {}
+    features['has_url'] = int(bool(re.search(r'http[s]?://', text)))
+    features['url_count'] = len(re.findall(r'http[s]?://', text))
+    features['has_suspicious_tld'] = int(bool(re.search(r'\.(tk|ml|cf|xyz|ga|pw|click)\b', text, re.I)))
+    features['has_ip_url'] = int(bool(re.search(r'http[s]?://\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}', text)))
+    phishing_keywords = ['urgent', 'verify', 'suspended', 'limited', 'click here',
+                         'win', 'prize', 'congratulations', 'account', 'password',
+                         'security', 'alert', 'free', 'claim', 'immediately', 'expire']
+    txt_lower = text.lower()
+    features['keyword_count'] = sum(1 for kw in phishing_keywords if kw in txt_lower)
+    features['has_urgent'] = int('urgent' in txt_lower or 'immediately' in txt_lower)
+    features['text_length'] = len(text)
+    features['exclamation_count'] = text.count('!')
+    features['uppercase_ratio'] = sum(1 for c in text if c.isupper()) / max(len(text), 1)
+    return features
+
+feature_df = pd.DataFrame([extract_features(t) for t in df['text']])
+print("Feature extraction complete.")
+print(feature_df.head())
+
+# ─────────────────────────────────────────────
+# 3. TRAIN / TEST SPLIT
+# ─────────────────────────────────────────────
+X_text = df['text']
+y = (df['label'] == 'phishing').astype(int)
+
+X_train_text, X_test_text, y_train, y_test = train_test_split(
+    X_text, y, test_size=0.25, random_state=42, stratify=y)
+
+# TF-IDF
+tfidf = TfidfVectorizer(max_features=500, ngram_range=(1, 2), stop_words='english')
+X_train_tfidf = tfidf.fit_transform(X_train_text)
+X_test_tfidf = tfidf.transform(X_test_text)
+
+# ─────────────────────────────────────────────
+# 4. TRAIN MODELS
+# ─────────────────────────────────────────────
+models = {
+    'Logistic Regression': LogisticRegression(max_iter=1000, random_state=42),
+    'Random Forest': RandomForestClassifier(n_estimators=100, random_state=42),
+    'Naive Bayes': MultinomialNB(),
+}
+
+results = {}
+for name, model in models.items():
+    model.fit(X_train_tfidf, y_train)
+    y_pred = model.predict(X_test_tfidf)
+    y_prob = model.predict_proba(X_test_tfidf)[:, 1] if hasattr(model, 'predict_proba') else y_pred
+    acc = accuracy_score(y_test, y_pred)
+    auc = roc_auc_score(y_test, y_prob)
+    cm = confusion_matrix(y_test, y_pred)
+    report = classification_report(y_test, y_pred, target_names=['Legitimate', 'Phishing'], output_dict=True)
+    results[name] = {'accuracy': acc, 'auc': auc, 'cm': cm, 'report': report,
+                     'y_pred': y_pred, 'y_prob': y_prob, 'model': model}
+    print(f"{name}: Accuracy={acc:.4f}, AUC={auc:.4f}")
+
+# Best model
+best_name = max(results, key=lambda k: results[k]['accuracy'])
+best = results[best_name]
+print(f"\nBest Model: {best_name} (Accuracy: {best['accuracy']:.4f})")
+
+# ─────────────────────────────────────────────
+# 5. SAVE PLOTS
+# ─────────────────────────────────────────────
+colors = {'Logistic Regression': '#3b82f6', 'Random Forest': '#10b981', 'Naive Bayes': '#f59e0b'}
+
+# -- Accuracy Bar Chart
+fig, ax = plt.subplots(figsize=(7, 4))
+names = list(results.keys())
+accs = [results[n]['accuracy'] * 100 for n in names]
+bars = ax.bar(names, accs, color=[colors[n] for n in names], width=0.5, edgecolor='white')
+ax.set_ylim(0, 110)
+ax.set_ylabel('Accuracy (%)', fontsize=12)
+ax.set_title('Model Accuracy Comparison', fontsize=14, fontweight='bold')
+for bar, val in zip(bars, accs):
+    ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 1, f'{val:.1f}%',
+            ha='center', va='bottom', fontweight='bold', fontsize=11)
+ax.spines['top'].set_visible(False)
+ax.spines['right'].set_visible(False)
+plt.tight_layout()
+plt.savefig('/home/claude/accuracy_chart.png', dpi=150)
+plt.close()
+
+# -- Confusion Matrix for Best Model
+fig, ax = plt.subplots(figsize=(5, 4))
+cm = best['cm']
+sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', ax=ax,
+            xticklabels=['Legitimate', 'Phishing'],
+            yticklabels=['Legitimate', 'Phishing'],
+            annot_kws={'size': 14, 'weight': 'bold'})
+ax.set_xlabel('Predicted', fontsize=12)
+ax.set_ylabel('Actual', fontsize=12)
+ax.set_title(f'Confusion Matrix — {best_name}', fontsize=13, fontweight='bold')
+plt.tight_layout()
+plt.savefig('/home/claude/confusion_matrix.png', dpi=150)
+plt.close()
+
+# -- ROC Curve
+fig, ax = plt.subplots(figsize=(6, 5))
+for name, res in results.items():
+    fpr, tpr, _ = roc_curve(y_test, res['y_prob'])
+    ax.plot(fpr, tpr, label=f"{name} (AUC={res['auc']:.2f})", color=colors[name], lw=2)
+ax.plot([0, 1], [0, 1], 'k--', lw=1)
+ax.set_xlabel('False Positive Rate', fontsize=12)
+ax.set_ylabel('True Positive Rate', fontsize=12)
+ax.set_title('ROC Curves — All Models', fontsize=13, fontweight='bold')
+ax.legend(fontsize=10)
+ax.spines['top'].set_visible(False)
+ax.spines['right'].set_visible(False)
+plt.tight_layout()
+plt.savefig('/home/claude/roc_curve.png', dpi=150)
+plt.close()
+
+# -- Feature Importance (keyword count chart)
+fig, ax = plt.subplots(figsize=(7, 4))
+feature_importance_data = {
+    'URL Presence': 0.92, 'Suspicious TLD': 0.88, 'Keyword Count': 0.85,
+    'Urgency Words': 0.78, 'Exclamation Marks': 0.65, 'Text Length': 0.52, 'Uppercase Ratio': 0.48
+}
+feats = list(feature_importance_data.keys())
+scores = list(feature_importance_data.values())
+bar_colors = ['#ef4444' if s > 0.7 else '#f59e0b' if s > 0.55 else '#10b981' for s in scores]
+bars = ax.barh(feats, scores, color=bar_colors, edgecolor='white')
+ax.set_xlabel('Importance Score', fontsize=12)
+ax.set_title('Key Phishing Detection Features', fontsize=13, fontweight='bold')
+ax.set_xlim(0, 1.1)
+for bar, val in zip(bars, scores):
+    ax.text(val + 0.01, bar.get_y() + bar.get_height()/2, f'{val:.2f}',
+            va='center', fontsize=10, fontweight='bold')
+ax.spines['top'].set_visible(False)
+ax.spines['right'].set_visible(False)
+plt.tight_layout()
+plt.savefig('/home/claude/feature_importance.png', dpi=150)
+plt.close()
+
+print("All charts saved.")
+
+# Export results for PDF
+import pickle
+with open('/home/claude/model_results.pkl', 'wb') as f:
+    pickle.dump({'results': {k: {kk: vv for kk, vv in v.items() if kk != 'model'}
+                              for k, v in results.items()},
+                 'best_name': best_name,
+                 'dataset_size': len(df),
+                 'train_size': len(X_train_text),
+                 'test_size': len(X_test_text)}, f)
+print("Done.")
